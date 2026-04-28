@@ -425,6 +425,13 @@ class AlbionKillboardApp(tk.Tk):
                          daemon=True).start()
         self._schedule_auto()
 
+    def _play_new_event_sound(self) -> None:
+        try:
+            import winsound
+            winsound.Beep(1047, 80)
+        except Exception:
+            pass
+
     def _silent_load(self, pid: str, server: str,
                      mode: str, prev_eid: Optional[str]) -> None:
         try:
@@ -459,9 +466,15 @@ class AlbionKillboardApp(tk.Tk):
         combined = events + assists
         combined.sort(key=lambda e: e.get("TimeStamp", ""), reverse=True)
 
+        old_ids = {str(e.get("EventId")) for e in self._events}
+        new_ids = {str(e.get("EventId")) for e in combined}
+        has_new = bool(old_ids and (new_ids - old_ids))
+
         self._events = combined
         self._event_types = event_types
         self.after(0, self._populate_silent, combined, mode, prev_eid)
+        if has_new:
+            threading.Thread(target=self._play_new_event_sound, daemon=True).start()
 
     def _populate_silent(self, events: list, mode: str,
                          prev_eid: Optional[str]) -> None:
