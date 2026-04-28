@@ -28,6 +28,7 @@ TEXT   = "#cdd0d8"
 SUB    = "#5c6270"
 KILL   = "#c9a84c"   # or (pas de rouge) — kills
 DEATH  = "#4a505e"   # gris discret — morts
+ASSIST = "#3a78b5"   # bleu — assistances
 HEAL   = "#4a8c6a"
 DARK   = "#0b0d14"
 
@@ -116,6 +117,8 @@ class AlbionKillboardApp(tk.Tk):
         self._pname: str = ""
         self._server: str = "Europe"
         self._events: List[dict] = []
+        self._event_types: Dict[str, str] = {}   # eid → "kill" | "death" | "assist"
+        self._assists_info: str = ""              # message de debug participations
         self._auto_job: Optional[str] = None
         self._AUTO_MS = 120_000  # 2 minutes
 
@@ -429,8 +432,36 @@ class AlbionKillboardApp(tk.Tk):
             events = fn(pid, server)
         except Exception:
             return
-        self._events = events
-        self.after(0, self._populate_silent, events, mode, prev_eid)
+
+        assists: List[dict] = []
+        if mode == "kills":
+            other_favs = [f for f in self._favorites if f["id"] != pid]
+            seen_ids = {str(e.get("EventId")) for e in events}
+            for fav in other_favs:
+                try:
+                    fav_kills = api.get_kills(fav["id"], server)
+                    for evt in fav_kills:
+                        eid = str(evt.get("EventId"))
+                        if eid in seen_ids:
+                            continue
+                        parts = evt.get("Participants", [])
+                        if any(p.get("Id") == pid for p in parts):
+                            assists.append(evt)
+                            seen_ids.add(eid)
+                except Exception:
+                    pass
+            self._assists_info = f"{len(assists)} assist(s) via {len(other_favs)} favori(s)"
+
+        base_type = "kill" if mode == "kills" else "death"
+        event_types: Dict[str, str] = {str(e.get("EventId")): base_type for e in events}
+        event_types.update({str(e.get("EventId")): "assist" for e in assists})
+
+        combined = events + assists
+        combined.sort(key=lambda e: e.get("TimeStamp", ""), reverse=True)
+
+        self._events = combined
+        self._event_types = event_types
+        self.after(0, self._populate_silent, combined, mode, prev_eid)
 
     def _populate_silent(self, events: list, mode: str,
                          prev_eid: Optional[str]) -> None:
@@ -458,63 +489,117 @@ class AlbionKillboardApp(tk.Tk):
         except Exception as exc:
             self.after(0, self._set_status, f"Erreur : {exc}")
             return
-        self._events = events
-        self.after(0, self._populate_list, events, mode)
+
+        assists: List[dict] = []
+        assists_info = ""
+        if mode == "kills":
+            other_favs = [f for f in self._favorites if f["id"] != pid]
+            if other_favs:
+                seen_ids = {str(e.get("EventId")) for e in events}
+                for fav in other_favs:
+                    try:
+                        fav_kills = api.get_kills(fav["id"], server)
+                        for evt in fav_kills:
+                            eid = str(evt.get("EventId"))
+                            if eid in seen_ids:
+                                continue
+                            parts = evt.get("Participants", [])
+                            if any(p.get("Id") == pid for p in parts):
+                                assists.append(evt)
+                                seen_ids.add(eid)
+                    except Exception:
+                        pass
+                assists_info = f"{len(assists)} assist(s) via {len(other_favs)} favori(s)"
+            else:
+                assists_info = "aucun autre favori"
+
+        base_type = "kill" if mode == "kills" else "death"
+        event_types: Dict[str, str] = {str(e.get("EventId")): base_type for e in events}
+        event_types.update({str(e.get("EventId")): "assist" for e in assists})
+
+        combined = events + assists
+        combined.sort(key=lambda e: e.get("TimeStamp", ""), reverse=True)
+
+        self._events = combined
+        self._event_types = event_types
+        self._assists_info = assists_info
+        self.after(0, self._populate_list, combined, mode)
 
     def _populate_list(self, events: list, mode: str) -> None:
         self._clear_list()
         if not events:
             self._set_status("Aucun événement.")
             return
+        n_assists = 0
         for evt in events:
-            other   = evt.get("Victim" if mode == "kills" else "Killer", {})
-            is_kill = mode == "kills"
-            date    = _fmt_date(evt.get("TimeStamp", ""))
-            name    = other.get("Name", "?")
-            guild   = other.get("GuildName", "")
-            ip      = f"{other.get('AverageItemPower', 0):.0f}"
-            fame    = _fmt_n(evt.get("TotalVictimKillFame", 0))
-            eid     = str(evt.get("EventId"))
-            self._add_list_row(eid, is_kill, name, guild, date, ip, fame)
-        self._set_status(f"{len(events)} événement(s) — {self._pname}")
+            eid       = str(evt.get("EventId"))
+            etype     = self._event_types.get(eid, "kill" if mode == "kills" else "death")
+            is_victim = etype == "death"
+            other     = evt.get("Victim" if not is_victim else "Killer", {})
+            date      = _fmt_date(evt.get("TimeStamp", ""))
+            name      = other.get("Name", "?")
+            guild     = other.get("GuildName", "")
+            ip        = f"{other.get('AverageItemPower', 0):.0f}"
+            fame      = _fmt_n(evt.get("TotalVictimKillFame", 0))
+            if etype == "assist":
+                n_assists += 1
+            self._add_list_row(eid, etype, name, guild, date, ip, fame)
+        n_main = len(events) - n_assists
+        parts = [f"{n_main} {'kill' if mode == 'kills' else 'mort'}(s)"]
+        if n_assists:
+            parts.append(f"{n_assists} assist(s)")
+        status = "  ·  ".join(parts) + f" — {self._pname}"
+        if self._assists_info:
+            status += f"  [{self._assists_info}]"
+        self._set_status(status)
 
-    def _add_list_row(self, eid: str, is_kill: bool, name: str, guild: str,
+    def _add_list_row(self, eid: str, event_type: str, name: str, guild: str,
                       date: str, ip: str, fame: str) -> None:
-        accent = KILL if is_kill else DEATH
+        accent = {"kill": KILL, "death": DEATH, "assist": ASSIST}.get(event_type, KILL)
         nbg    = CARD
 
         row = tk.Frame(self._list_inner, bg=nbg, cursor="hand2")
         row.pack(fill=tk.X)
 
-        # Bordure gauche colorée (kill vs mort)
+        # Bordure gauche colorée
         tk.Frame(row, bg=accent, width=3).pack(side=tk.LEFT, fill=tk.Y)
 
-        body = tk.Frame(row, bg=nbg, padx=10, pady=7)
+        body = tk.Frame(row, bg=nbg, padx=10, pady=8)
         body.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-        # Ligne 1 : nom (bold) + fame (or)
+        # Ligne 1 : badge assist (optionnel) + nom + guilde (gauche) | fame (droite)
         l1 = tk.Frame(body, bg=nbg)
         l1.pack(fill=tk.X)
-        nl = tk.Label(l1, text=name, bg=nbg, fg=TEXT,
-                      font=("Segoe UI", 10, "bold"), anchor=tk.W)
-        nl.pack(side=tk.LEFT)
+        if event_type == "assist":
+            bl = tk.Label(l1, text="⚡", bg=nbg, fg=ASSIST,
+                          font=("Segoe UI", 11, "bold"))
+            bl.pack(side=tk.LEFT, padx=(0, 4))
+        else:
+            bl = None
         fl = tk.Label(l1, text=fame, bg=nbg, fg=ACCENT,
-                      font=("Segoe UI", 9, "bold"))
+                      font=("Segoe UI", 11, "bold"))
         fl.pack(side=tk.RIGHT)
+        nl = tk.Label(l1, text=name, bg=nbg, fg=TEXT,
+                      font=("Segoe UI", 12, "bold"), anchor=tk.W)
+        nl.pack(side=tk.LEFT)
+        gl = tk.Label(l1, text=f"  {guild}" if guild else "", bg=nbg, fg=SUB,
+                      font=("Segoe UI", 10))
+        gl.pack(side=tk.LEFT)
 
-        # Ligne 2 : guilde + date + IP
+        # Ligne 2 : date + IP
         l2 = tk.Frame(body, bg=nbg)
         l2.pack(fill=tk.X)
-        sub_txt = (f"{guild}   ·   " if guild else "") + f"{date}   ·   IP {ip}"
-        sl = tk.Label(l2, text=sub_txt, bg=nbg, fg=SUB,
-                      font=("Segoe UI", 8))
+        sl = tk.Label(l2, text=f"{date}   ·   IP {ip}", bg=nbg, fg=TEXT,
+                      font=("Segoe UI", 10))
         sl.pack(side=tk.LEFT)
 
         # Séparateur fin
         tk.Frame(self._list_inner, bg="#13151e", height=1).pack(fill=tk.X)
 
         # Tous les widgets du row pour colorisation sélection / scroll
-        all_w = [row, body, l1, l2, nl, fl, sl]
+        all_w = [row, body, l1, l2, nl, fl, gl, sl]
+        if bl:
+            all_w.append(bl)
         self._row_widgets[eid] = all_w
 
         def on_click(_e, e=eid):
@@ -794,7 +879,7 @@ class AlbionKillboardApp(tk.Tk):
                         next(iter(q_map.values()), 0) if q_map else 0)
                     total += price * count
                 s = _fmt_n(total) if total > 0 else "N/A"
-                self.after(0, lambda s_=s, l=lbl: l.config(text=f"≈ {s_} silver"))
+                self.after(0, lambda s_=s, l=lbl: l.winfo_exists() and l.config(text=f"≈ {s_} silver"))
             except Exception:
                 pass
 
@@ -872,7 +957,7 @@ class AlbionKillboardApp(tk.Tk):
                         next(iter(q_map.values()), 0) if q_map else 0)
                     total += price * count
                 s = _fmt_n(total) if total > 0 else "N/A"
-                self.after(0, lambda s_=s, l=lbl: l.config(text=f"≈ {s_} silver"))
+                self.after(0, lambda s_=s, l=lbl: l.winfo_exists() and l.config(text=f"≈ {s_} silver"))
             except Exception:
                 pass
 
