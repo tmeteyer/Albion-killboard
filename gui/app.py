@@ -724,8 +724,8 @@ class AlbionKillboardApp(tk.Tk):
         # Un seul frame grid pour les 3 rangées — colonnes partagées = alignement garanti
         all_rows = tk.Frame(inner, bg=CARD)
         all_rows.pack(fill=tk.X, padx=6, pady=(6, 8))
-        all_rows.columnconfigure(0, weight=1)
-        all_rows.columnconfigure(2, weight=1)
+        all_rows.columnconfigure(0, weight=1, uniform="half")
+        all_rows.columnconfigure(2, weight=1, uniform="half")
 
         # Rangée 0 : infos joueur + équipement
         self._player_card(all_rows, killer, "KILLER", KILL, 0, 0)
@@ -768,10 +768,9 @@ class AlbionKillboardApp(tk.Tk):
 
         tk.Label(card, text=name, bg=CARD, fg=TEXT,
                  font=("Segoe UI", 14, "bold")).pack(anchor=tk.W)
-        if guild:
-            txt = guild + (f"  ·  {ally}" if ally else "")
-            tk.Label(card, text=txt, bg=CARD, fg=SUB,
-                     font=("Segoe UI", 10)).pack(anchor=tk.W)
+        guild_txt = (guild + (f"  ·  {ally}" if ally else "")) if guild else ""
+        tk.Label(card, text=guild_txt, bg=CARD, fg=SUB,
+                 font=("Segoe UI", 10)).pack(anchor=tk.W)
         tk.Label(card,
                  text=f"IP {ip:.0f}   ·   KF {_fmt_n(kf)}   ·   DF {_fmt_n(df)}",
                  bg=CARD, fg=SUB, font=("Segoe UI", 10)).pack(anchor=tk.W,
@@ -857,42 +856,69 @@ class AlbionKillboardApp(tk.Tk):
 
     def _value_banner(self, parent: tk.Frame,
                       equipment: dict, inventory: list, row: int, col: int) -> None:
-        """Bandeau valeur totale — placé dans une rangée grid partagée pour l'alignement."""
+        """Bandeau valeur — placé dans une rangée grid partagée pour l'alignement."""
         banner = tk.Frame(parent, bg=PANEL, pady=10)
         banner.grid(row=row, column=col, sticky=tk.EW, padx=(0, 4) if col == 0 else (4, 0))
 
-        val_lbl = tk.Label(banner, text="…", bg=PANEL, fg=ACCENT,
-                           font=("Segoe UI", 17, "bold"))
-        val_lbl.pack()
-        tk.Label(banner, text="Valeur totale — équipement + inventaire",
-                 bg=PANEL, fg=SUB, font=("Segoe UI", 8)).pack()
+        total_lbl = tk.Label(banner, text="…", bg=PANEL, fg=ACCENT,
+                             font=("Segoe UI", 17, "bold"))
+        total_lbl.pack()
 
-        all_items: list = []
+        detail_f = tk.Frame(banner, bg=PANEL)
+        detail_f.pack()
+        eq_lbl  = tk.Label(detail_f, text="Équip. …", bg=PANEL, fg=SUB,
+                           font=("Segoe UI", 8))
+        eq_lbl.pack(side=tk.LEFT, padx=(0, 8))
+        inv_lbl = tk.Label(detail_f, text="Inv. …", bg=PANEL, fg=SUB,
+                           font=("Segoe UI", 8))
+        inv_lbl.pack(side=tk.LEFT)
+
+        equip_items: list = []
         for slot_item in equipment.values():
             if slot_item and slot_item.get("Type"):
-                all_items.append((slot_item["Type"],
-                                  max(slot_item.get("Quality", 1), 1), 1))
-        for inv_item in inventory:
-            all_items.append((inv_item["Type"],
-                              max(inv_item.get("Quality", 1), 1),
-                              inv_item.get("Count", 1)))
+                equip_items.append((slot_item["Type"],
+                                    max(slot_item.get("Quality", 1), 1), 1))
+        inv_items: list = [
+            (i["Type"], max(i.get("Quality", 1), 1), i.get("Count", 1))
+            for i in inventory
+        ]
 
-        if not all_items:
-            val_lbl.config(text="N/A")
+        if not equip_items and not inv_items:
+            total_lbl.config(text="N/A")
+            eq_lbl.config(text="Équip. N/A")
+            inv_lbl.config(text="Inv. N/A")
             return
 
-        def _fetch(items=all_items, lbl=val_lbl) -> None:
+        def _fetch(ei=equip_items, ii=inv_items,
+                   tl=total_lbl, el=eq_lbl, il=inv_lbl) -> None:
             try:
-                types = list({t for t, _, _ in items})
-                prices = api.fetch_prices(types)
-                total = 0
-                for itype, qual, count in items:
-                    q_map = prices.get(itype, {})
-                    price = q_map.get(qual) or q_map.get(1) or (
-                        next(iter(q_map.values()), 0) if q_map else 0)
-                    total += price * count
-                s = _fmt_n(total) if total > 0 else "N/A"
-                self.after(0, lambda s_=s, l=lbl: l.winfo_exists() and l.config(text=f"≈ {s_} silver"))
+                all_types = list({t for t, _, _ in ei + ii})
+                prices = api.fetch_prices(all_types)
+
+                def _val(items):
+                    total = 0
+                    for itype, qual, count in items:
+                        q_map = prices.get(itype, {})
+                        price = q_map.get(qual) or q_map.get(1) or (
+                            next(iter(q_map.values()), 0) if q_map else 0)
+                        total += price * count
+                    return total
+
+                eq_val  = _val(ei)
+                inv_val = _val(ii)
+                grand   = eq_val + inv_val
+
+                ts = f"≈ {_fmt_n(grand)} silver" if grand > 0 else "N/A"
+                es = f"Équip. {_fmt_n(eq_val)}"  if eq_val  > 0 else "Équip. —"
+                is_ = f"Inv. {_fmt_n(inv_val)}"  if inv_val > 0 else "Inv. —"
+
+                def _apply(ts_=ts, es_=es, is__=is_) -> None:
+                    if tl.winfo_exists():
+                        tl.config(text=ts_)
+                        el.config(text=es_)
+                        il.config(text=is__)
+
+                self.after(0, _apply)
             except Exception:
                 pass
 
