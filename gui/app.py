@@ -739,15 +739,11 @@ class AlbionKillboardApp(tk.Tk):
 
         self._player_card(all_rows, victim, "VICTIME", DEATH, 0, 2)
 
-        # Rangée 1 : bandeaux valeur (même grille → même largeur de colonnes)
-        self._value_banner(all_rows, killer_equip, killer_inv, 1, 0)
-        tk.Frame(all_rows, bg=CARD).grid(row=1, column=1)
-        self._value_banner(all_rows, victim_equip, victim_inv, 1, 2)
+        # Rangée 1 : bandeau silver obtenus (pleine largeur)
+        self._value_banner(all_rows, victim_equip, victim_inv, 1, 0)
 
-        # Rangée 2 : inventaires (même grille → parfaitement alignés)
-        self._inv_grid_col(all_rows, killer_inv, 2, 0)
-        tk.Frame(all_rows, bg=CARD).grid(row=2, column=1)
-        self._inv_grid_col(all_rows, victim_inv, 2, 2)
+        # Rangée 2 : inventaire victime en pleine largeur
+        self._inv_grid_col(all_rows, victim_inv, 2, 0, colspan=3)
 
     def _player_card(self, parent: tk.Frame, player: dict,
                      label: str, color: str, row: int, col: int) -> None:
@@ -856,22 +852,15 @@ class AlbionKillboardApp(tk.Tk):
 
     def _value_banner(self, parent: tk.Frame,
                       equipment: dict, inventory: list, row: int, col: int) -> None:
-        """Bandeau valeur — placé dans une rangée grid partagée pour l'alignement."""
+        """Bandeau Silver obtenus (equip + inv)."""
         banner = tk.Frame(parent, bg=PANEL, pady=10)
-        banner.grid(row=row, column=col, sticky=tk.EW, padx=(0, 4) if col == 0 else (4, 0))
+        banner.grid(row=row, column=col, sticky=tk.EW, columnspan=3)
 
-        total_lbl = tk.Label(banner, text="…", bg=PANEL, fg=ACCENT,
-                             font=("Segoe UI", 17, "bold"))
-        total_lbl.pack()
-
-        detail_f = tk.Frame(banner, bg=PANEL)
-        detail_f.pack()
-        eq_lbl  = tk.Label(detail_f, text="Équip. …", bg=PANEL, fg=SUB,
-                           font=("Segoe UI", 8))
-        eq_lbl.pack(side=tk.LEFT, padx=(0, 8))
-        inv_lbl = tk.Label(detail_f, text="Inv. …", bg=PANEL, fg=SUB,
-                           font=("Segoe UI", 8))
-        inv_lbl.pack(side=tk.LEFT)
+        silver_lbl = tk.Label(banner, text="…", bg=PANEL, fg=ACCENT,
+                              font=("Segoe UI", 17, "bold"))
+        silver_lbl.pack()
+        tk.Label(banner, text="Silver obtenus  (équip. + inv.)",
+                 bg=PANEL, fg=SUB, font=("Segoe UI", 8)).pack()
 
         equip_items: list = []
         for slot_item in equipment.values():
@@ -884,51 +873,32 @@ class AlbionKillboardApp(tk.Tk):
         ]
 
         if not equip_items and not inv_items:
-            total_lbl.config(text="N/A")
-            eq_lbl.config(text="Équip. N/A")
-            inv_lbl.config(text="Inv. N/A")
+            silver_lbl.config(text="N/A")
             return
 
-        def _fetch(ei=equip_items, ii=inv_items,
-                   tl=total_lbl, el=eq_lbl, il=inv_lbl) -> None:
+        def _fetch(ei=equip_items, ii=inv_items, sl=silver_lbl) -> None:
             try:
                 all_types = list({t for t, _, _ in ei + ii})
                 prices = api.fetch_prices(all_types)
-
-                def _val(items):
-                    total = 0
-                    for itype, qual, count in items:
-                        q_map = prices.get(itype, {})
-                        price = q_map.get(qual) or q_map.get(1) or (
-                            next(iter(q_map.values()), 0) if q_map else 0)
-                        total += price * count
-                    return total
-
-                eq_val  = _val(ei)
-                inv_val = _val(ii)
-                grand   = eq_val + inv_val
-
-                ts = f"≈ {_fmt_n(grand)} silver" if grand > 0 else "N/A"
-                es = f"Équip. {_fmt_n(eq_val)}"  if eq_val  > 0 else "Équip. —"
-                is_ = f"Inv. {_fmt_n(inv_val)}"  if inv_val > 0 else "Inv. —"
-
-                def _apply(ts_=ts, es_=es, is__=is_) -> None:
-                    if tl.winfo_exists():
-                        tl.config(text=ts_)
-                        el.config(text=es_)
-                        il.config(text=is__)
-
-                self.after(0, _apply)
+                total = 0
+                for itype, qual, count in ei + ii:
+                    q_map = prices.get(itype, {})
+                    price = q_map.get(qual) or q_map.get(1) or (
+                        next(iter(q_map.values()), 0) if q_map else 0)
+                    total += price * count
+                s = f"≈ {_fmt_n(total)} silver" if total > 0 else "N/A"
+                self.after(0, lambda s_=s: sl.winfo_exists() and sl.config(text=s_))
             except Exception:
                 pass
 
         threading.Thread(target=_fetch, daemon=True).start()
 
     def _inv_grid_col(self, parent: tk.Frame,
-                      inventory: list, row: int, col: int) -> None:
+                      inventory: list, row: int, col: int,
+                      colspan: int = 1) -> None:
         """Grille d'inventaire — placée dans une rangée grid partagée pour l'alignement."""
         cell = tk.Frame(parent, bg=CARD, padx=8, pady=4)
-        cell.grid(row=row, column=col, sticky=tk.NSEW)
+        cell.grid(row=row, column=col, sticky=tk.NSEW, columnspan=colspan)
 
         tk.Label(cell, text="Inventaire", bg=CARD, fg=SUB,
                  font=("Segoe UI", 9, "bold")).pack(anchor=tk.W, pady=(4, 4))
@@ -940,7 +910,7 @@ class AlbionKillboardApp(tk.Tk):
 
         grid = tk.Frame(cell, bg=CARD)
         grid.pack(anchor=tk.W)
-        cols_per_row = 4
+        cols_per_row = 8
         for idx, item in enumerate(inventory):
             self._inv_slot(grid, item, idx // cols_per_row, idx % cols_per_row)
 
